@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AudioScript · OBS 字幕</title>
+    <style>
+      :root {
+        --font-stack: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei",
+          "Noto Sans SC", "Source Han Sans SC", system-ui, -apple-system, sans-serif;
+        --font-size: 40px;
+        --font-color: #ffffff;
+        --source-color: rgba(255, 255, 255, 0.78);
+        --accent: #7dd3fc;
+        --pad: 28px;
+        --stage-width: 100%;
+        --bg: rgba(12, 12, 18, 0);
+        --radius: 18px;
+        --blur: 0px;
+        --shadow: 0 2px 18px rgba(0, 0, 0, 0.55);
+        --accent-width: 3px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+
+      body[data-preview="1"]::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        background: linear-gradient(135deg, #151823 0%, #262d3c 48%, #3d322a 100%);
+      }
+
+      body {
+        font-size: var(--font-size);
+        font-family: var(--font-stack);
+        color: var(--font-color);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      #root {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        padding: var(--pad);
+      }
+
+      #stage {
+        width: var(--stage-width);
+        max-width: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        padding: 14px 20px;
+        border-radius: var(--radius);
+        background: var(--bg);
+        -webkit-backdrop-filter: blur(var(--blur));
+        backdrop-filter: blur(var(--blur));
+        transition: opacity 0.35s ease;
+      }
+
+      .list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.32em;
+        transition: opacity 0.35s ease;
+      }
+
+      .seg {
+        display: flex;
+        justify-content: flex-start;
+        gap: 0.45em;
+        padding: 0.06em 0 0.06em 0;
+        opacity: 0.58;
+        transform: translateY(0);
+        transition: opacity 0.28s ease, transform 0.28s ease;
+      }
+
+      .seg[data-active="1"] {
+        opacity: 1;
+      }
+
+      .seg[data-fresh="1"] {
+        animation: rise 0.35s ease both;
+      }
+
+      @keyframes rise {
+        from {
+          transform: translateY(9px);
+        }
+        to {
+          transform: translateY(0);
+        }
+      }
+
+      .bar {
+        flex: 0 0 var(--accent-width);
+        border-radius: var(--accent-width);
+        background: var(--accent);
+        opacity: 0;
+        margin-top: 0.16em;
+        margin-bottom: 0.16em;
+        transition: opacity 0.28s ease;
+      }
+
+      .seg[data-active="1"] .bar {
+        opacity: 0.9;
+      }
+
+      .seg[data-state="partial"] .bar {
+        opacity: 0.45;
+      }
+
+      body[data-align="center"] .seg {
+        justify-content: center;
+      }
+
+      body[data-align="right"] .seg {
+        justify-content: flex-end;
+      }
+
+      body[data-align="center"] .lines,
+      body[data-align="right"] .lines {
+        flex: 0 1 auto;
+      }
+
+      .lines {
+        min-width: 0;
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 0.1em;
+      }
+
+      .src,
+      .trans {
+        margin: 0;
+        line-height: 1.28;
+        overflow-wrap: anywhere;
+        text-shadow: var(--shadow);
+        white-space: pre-wrap;
+      }
+
+      .src {
+        font-size: 0.62em;
+        color: var(--source-color);
+        font-weight: 450;
+        letter-spacing: 0.005em;
+      }
+
+      .trans {
+        font-size: 1em;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
+      .seg[data-state="partial"] .trans {
+        opacity: 0.92;
+      }
+
+      body[data-translation="0"] .src {
+        font-size: 1em;
+        font-weight: 600;
+        color: var(--font-color);
+      }
+
+      .trans.placeholder {
+        font-weight: 500;
+        opacity: 0.55;
+        font-size: 0.72em;
+        font-style: italic;
+      }
+
+      .caret {
+        display: inline-block;
+        width: 0.06em;
+        min-width: 2px;
+        height: 0.92em;
+        margin-left: 0.06em;
+        vertical-align: -0.06em;
+        background: var(--accent);
+        border-radius: 2px;
+        animation: blink 1s steps(2, start) infinite;
+      }
+
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .hint {
+        font-size: 0.52em;
+        opacity: 0.5;
+        text-align: center;
+        padding: 0.4em 0;
+        text-shadow: var(--shadow);
+      }
+
+      .hint[hidden] {
+        display: none;
+      }
+
+      #status {
+        position: fixed;
+        top: 12px;
+        right: 14px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(10, 12, 18, 0.62);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: #e6e9f2;
+        font: 500 12px/1.2 var(--font-stack);
+        letter-spacing: 0.02em;
+        opacity: 0;
+        transition: opacity 0.35s ease;
+      }
+
+      #status[data-show="1"] {
+        opacity: 1;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #f59e0b;
+      }
+
+      #status[data-live="1"] .dot {
+        background: #22c55e;
+        box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+      }
+
+      .badge {
+        display: none;
+        align-self: flex-end;
+        margin-top: 0.5em;
+        font-size: 0.36em;
+        letter-spacing: 0.06em;
+        opacity: 0.42;
+      }
+
+      .badge[data-show="1"] {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="stage">
+        <div class="list" id="list"></div>
+        <div class="hint" id="hint">等待 AudioScript 字幕…</div>
+        <div class="badge" id="badge">AUDIOSCRIPT</div>
+      </div>
+    </div>
+    <div id="status" data-show="0"><span class="dot"></span><span id="statusText">连接中…</span></div>
+
+    <script>
+      "use strict"
+
+      const PAGE = {
+        lines: 3,
+        fontSize: 40,
+        fontColor: "#ffffff",
+        sourceColor: "rgba(255, 255, 255, 0.78)",
+        accent: "#7dd3fc",
+        bg: "#0c0c12",
+        bgOpacity: 0,
+        radius: 18,
+        blur: 0,
+        pad: 28,
+        maxWidth: 0,
+        align: "center",
+        showSource: true,
+        showTranslation: true,
+        outline: true,
+        shadow: true,
+        idle: 0,
+        badge: false,
+        debug: false,
+        preview: false,
+        linesGap: 0.32,
+      }
+
+      function param(name, fallback) {
+        const value = new URLSearchParams(location.search).get(name)
+        return value === null || value === "" ? fallback : value
+      }
+
+      function num(name, fallback, min, max) {
+        const raw = new URLSearchParams(location.search).get(name)
+        if (raw === null || raw === "") return fallback
+        const parsed = Number(raw)
+        if (!Number.isFinite(parsed)) return fallback
+        return Math.min(max, Math.max(min, parsed))
+      }
+
+      function bool(name, fallback) {
+        const raw = new URLSearchParams(location.search).get(name)
+        if (raw === null || raw === "") return fallback
+        return !["0", "false", "no", "off"].includes(raw.toLowerCase())
+      }
+
+      function hexToRgba(hex, alpha) {
+        const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex).trim())
+        if (!match) return `rgba(12, 12, 18, ${alpha})`
+        let body = match[1]
+        if (body.length === 3) body = body.split("").map((c) => c + c).join("")
+        const n = parseInt(body, 16)
+        return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+      }
+
+      const cfg = {
+        lines: Math.round(num("lines", PAGE.lines, 1, 20)),
+        fontSize: num("fontSize", PAGE.fontSize, 12, 140),
+        fontColor: param("fontColor", PAGE.fontColor),
+        sourceColor: param("sourceColor", PAGE.sourceColor),
+        accent: param("accent", PAGE.accent),
+        bg: param("bg", PAGE.bg),
+        bgOpacity: num("bgOpacity", PAGE.bgOpacity, 0, 100) / 100,
+        radius: num("radius", PAGE.radius, 0, 48),
+        blur: num("blur", PAGE.blur, 0, 40),
+        pad: num("pad", PAGE.pad, 0, 200),
+        maxWidth: num("maxWidth", PAGE.maxWidth, 0, 4000),
+        align: param("align", PAGE.align),
+        showSource: bool("showSource", PAGE.showSource),
+        showTranslation: bool("showTranslation", PAGE.showTranslation),
+        shadow: bool("shadow", PAGE.shadow),
+        idle: num("idle", PAGE.idle, 0, 3600),
+        badge: bool("badge", PAGE.badge),
+        debug: bool("debug", PAGE.debug),
+        preview: bool("preview", PAGE.preview),
+      }
+
+      function applyConfig() {
+        const root = document.documentElement.style
+        root.setProperty("--font-size", cfg.fontSize + "px")
+        root.setProperty("--font-color", cfg.fontColor)
+        root.setProperty("--source-color", cfg.sourceColor)
+        root.setProperty("--accent", cfg.accent)
+        root.setProperty("--pad", cfg.pad + "px")
+        root.setProperty("--radius", cfg.radius + "px")
+        root.setProperty("--blur", cfg.blur + "px")
+        root.setProperty("--stage-width", cfg.maxWidth > 0 ? cfg.maxWidth + "px" : "100%")
+        root.setProperty("--bg", hexToRgba(cfg.bg, cfg.bgOpacity))
+        root.setProperty(
+          "--shadow",
+          cfg.shadow
+            ? "0 1px 2px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.6), 0 2px 16px rgba(0,0,0,0.55)"
+            : "none",
+        )
+        const stage = document.getElementById("stage")
+        stage.style.alignItems =
+          cfg.align === "left" ? "flex-start" : cfg.align === "right" ? "flex-end" : "center"
+        stage.style.textAlign = cfg.align
+        document.getElementById("badge").dataset.show = cfg.badge ? "1" : "0"
+        document.body.dataset.translation = cfg.showTranslation ? "1" : "0"
+        document.body.dataset.preview = cfg.preview ? "1" : "0"
+        document.body.dataset.align = cfg.align
+      }
+
+      function endpoint() {
+        const explicit = param("endpoint", "")
+        if (explicit) return explicit
+        const host = param("host", "")
+        const port = param("port", "")
+        if (host || port) {
+          return `http://${host || "127.0.0.1"}:${port || 17890}/events`
+        }
+        if (location.protocol === "http:" || location.protocol === "https:") return "/events"
+        return "http://127.0.0.1:17890/events"
+      }
+
+      const state = {
+        segments: new Map(),
+        order: [],
+        nodes: new Map(),
+        source: null,
+        idleTimer: 0,
+        connected: false,
+        hadData: false,
+      }
+
+      const listEl = document.getElementById("list")
+      const hintEl = document.getElementById("hint")
+      const badgeEl = document.getElementById("badge")
+      const statusEl = document.getElementById("status")
+      const statusText = document.getElementById("statusText")
+
+      function setStatus(text, live) {
+        if (!cfg.debug && !text) {
+          statusEl.dataset.show = "0"
+          return
+        }
+        statusText.textContent = text
+        statusEl.dataset.live = live ? "1" : "0"
+        statusEl.dataset.show = "1"
+        if (live) {
+          window.setTimeout(() => {
+            if (!cfg.debug) statusEl.dataset.show = "0"
+          }, 2200)
+        }
+      }
+
+      function reset() {
+        state.segments.clear()
+        state.order = []
+        for (const node of state.nodes.values()) node.el.remove()
+        state.nodes.clear()
+        state.hadData = false
+        render()
+      }
+
+      function upsert(segments) {
+        if (!Array.isArray(segments)) return
+        let changed = false
+        for (const seg of segments) {
+          if (!seg || typeof seg.id !== "string") continue
+          const prev = state.segments.get(seg.id)
+          if (prev && Number(seg.revision) <= Number(prev.revision)) continue
+          if (!prev) state.order.push(seg.id)
+          state.segments.set(seg.id, seg)
+          changed = true
+        }
+        if (!changed) return
+        prune()
+        render()
+        state.hadData = true
+        bumpIdle()
+      }
+
+      function prune() {
+        const limit = 40
+        while (state.order.length > limit) {
+          const id = state.order.shift()
+          state.segments.delete(id)
+        }
+      }
+
+      function visibleSegments() {
+        const list = []
+        for (const id of state.order) {
+          const seg = state.segments.get(id)
+          if (!seg) continue
+          const hasText = !!(seg.text && seg.text.trim())
+          const hasTrans = !!(seg.translation && (seg.translationState === "done" || seg.translationState === 2))
+          if (!hasText && !hasTrans) continue
+          list.push(seg)
+        }
+        return list.slice(-cfg.lines)
+      }
+
+      function makeNode() {
+        const el = document.createElement("div")
+        el.className = "seg"
+        const bar = document.createElement("div")
+        bar.className = "bar"
+        const lines = document.createElement("div")
+        lines.className = "lines"
+        const src = document.createElement("p")
+        src.className = "src"
+        src.dir = "auto"
+        const srcText = document.createTextNode("")
+        src.append(srcText)
+        const trans = document.createElement("p")
+        trans.className = "trans"
+        trans.dir = "auto"
+        const transText = document.createTextNode("")
+        trans.append(transText)
+        lines.append(src, trans)
+        el.append(bar, lines)
+        return {
+          el,
+          src,
+          trans,
+          srcText,
+          transText,
+          srcShown: "",
+          transShown: "",
+          srcRaf: 0,
+          transRaf: 0,
+        }
+      }
+
+      function animateText(node, key, target) {
+        const textNode = key === "src" ? node.srcText : node.transText
+        const shownKey = key === "src" ? "srcShown" : "transShown"
+        const prev = node[shownKey] || ""
+
+        if (!target.startsWith(prev) || target.length - prev.length < 6) {
+          node[shownKey] = target
+          textNode.data = target
+          return
+        }
+
+        const from = prev.length
+        const started = performance.now()
+        const duration = 240
+        const rafKey = key === "src" ? "srcRaf" : "transRaf"
+        if (node[rafKey]) cancelAnimationFrame(node[rafKey])
+
+        const tick = (now) => {
+          const progress = Math.min(1, (now - started) / duration)
+          const next = target.slice(0, from + Math.round((target.length - from) * progress))
+          if (next !== node[shownKey]) {
+            node[shownKey] = next
+            textNode.data = next
+          }
+          if (progress < 1) {
+            node[rafKey] = requestAnimationFrame(tick)
+          } else {
+            node[rafKey] = 0
+            node[shownKey] = target
+            textNode.data = target
+          }
+        }
+        node[rafKey] = requestAnimationFrame(tick)
+      }
+
+      function render() {
+        const visible = visibleSegments()
+        hintEl.hidden = visible.length > 0 || state.hadData
+
+        const alive = new Set()
+        visible.forEach((seg, index) => {
+          const id = seg.id
+          alive.add(id)
+          let node = state.nodes.get(id)
+          const fresh = !node
+          if (!node) {
+            node = makeNode()
+            state.nodes.set(id, node)
+          }
+          if (fresh) {
+            node.el.dataset.fresh = "1"
+            listEl.append(node.el)
+            window.setTimeout(() => {
+              delete node.el.dataset.fresh
+            }, 380)
+          } else {
+            delete node.el.dataset.fresh
+            if (listEl.lastElementChild !== node.el) listEl.append(node.el)
+          }
+
+          const active = index === visible.length - 1
+          node.el.dataset.active = active ? "1" : "0"
+          node.el.dataset.state = seg.state === "partial" || seg.state === 0 ? "partial" : "final"
+
+          const sourceText = (seg.text || "").trim()
+          const transText = (seg.translation || "").trim()
+          const translated =
+            !!transText && (seg.translationState === "done" || seg.translationState === 2)
+          const failed = seg.translationState === "failed" || seg.translationState === 3
+
+          const partial = seg.state === "partial" || seg.state === 0
+          const showSrc = cfg.showSource && !!sourceText
+
+          node.src.hidden = !showSrc
+          if (sourceText) animateText(node, "src", sourceText)
+          else if (node.srcShown) {
+            node.srcText.data = ""
+            node.srcShown = ""
+          }
+
+          node.trans.classList.remove("placeholder")
+          if (!cfg.showTranslation) {
+            node.trans.hidden = true
+            if (node.transShown) {
+              node.transText.data = ""
+              node.transShown = ""
+            }
+          } else if (translated) {
+            node.trans.hidden = false
+            animateText(node, "trans", transText)
+          } else if (failed) {
+            node.trans.hidden = false
+            node.trans.classList.add("placeholder")
+            if (node.transShown) {
+              node.transText.data = ""
+              node.transShown = ""
+            }
+            node.transText.data = "翻译失败"
+          } else {
+            node.trans.hidden = true
+            if (node.transShown) {
+              node.transText.data = ""
+              node.transShown = ""
+            }
+          }
+
+          const caretTarget = translated ? node.trans : showSrc ? node.src : null
+          if (active && partial && caretTarget) {
+            if (caretTarget === node.trans) removeCaret(node.src)
+            else removeCaret(node.trans)
+            appendCaret(caretTarget)
+          } else {
+            removeCaret(node.src)
+            removeCaret(node.trans)
+          }
+        })
+
+        for (const [id, node] of state.nodes) {
+          if (alive.has(id)) continue
+          if (node.srcRaf) cancelAnimationFrame(node.srcRaf)
+          if (node.transRaf) cancelAnimationFrame(node.transRaf)
+          node.el.remove()
+          state.nodes.delete(id)
+        }
+
+        badgeEl.dataset.show = cfg.badge ? "1" : "0"
+      }
+
+      function appendCaret(el) {
+        if (el.querySelector(".caret")) return
+        const caret = document.createElement("span")
+        caret.className = "caret"
+        el.append(caret)
+      }
+
+      function removeCaret(el) {
+        const caret = el.querySelector(".caret")
+        if (caret) caret.remove()
+      }
+
+      function bumpIdle() {
+        if (cfg.idle <= 0) return
+        listEl.style.opacity = "1"
+        window.clearTimeout(state.idleTimer)
+        state.idleTimer = window.setTimeout(() => {
+          listEl.style.opacity = "0"
+        }, cfg.idle * 1000)
+      }
+
+      function connect() {
+        let source
+        try {
+          source = new EventSource(endpoint())
+        } catch (e) {
+          setStatus("地址无效", false)
+          return
+        }
+        state.source = source
+
+        source.addEventListener("open", () => {
+          state.connected = true
+          setStatus("已连接 AudioScript", true)
+        })
+
+        source.addEventListener("state", (event) => {
+          try {
+            const data = JSON.parse(event.data)
+            if (data && typeof data.running === "boolean" && !data.running && state.hadData) {
+              // 停止采集后保留最后一屏，不清屏，方便剪辑时定格。
+            }
+          } catch (e) {
+            /* 忽略坏帧 */
+          }
+        })
+
+        source.addEventListener("segments", (event) => {
+          try {
+            upsert(JSON.parse(event.data))
+          } catch (e) {
+            setStatus("字幕数据解析失败", false)
+          }
+        })
+
+        source.addEventListener("reset", () => {
+          reset()
+        })
+
+        source.addEventListener("error", () => {
+          state.connected = false
+          setStatus("未连接，重试中…", false)
+        })
+      }
+
+      applyConfig()
+      render()
+      connect()
+
+      window.addEventListener("beforeunload", () => {
+        if (state.source) state.source.close()
+        window.clearTimeout(state.idleTimer)
+      })
+    </script>
+  </body>
+</html>
