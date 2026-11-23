@@ -13,8 +13,8 @@ concurrency:
 jobs:
   build:
     name: macOS arm64 (native 17890)
-    # macos-15 是 Apple Silicon（arm64）；不要用 macos-13（Intel）
-    runs-on: macos-15
+    # macos-26 是 Apple Silicon（arm64）；不要用 macos-13（Intel）
+    runs-on: macos-26
     timeout-minutes: 120
 
     steps:
