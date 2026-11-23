@@ -1,0 +1,152 @@
+name: Build OBS macOS (Apple Silicon)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-obs-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS arm64 (native 17890)
+    # macos-26 是 Apple Silicon（arm64），自带 Xcode 26 / SDK 26.4+；
+    # translation-rs 0.5.2 需要 SDK 26.4 里的 TranslationSession.Response 成员
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assert arm64 runner
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64 || {
+            echo "::error::这台 runner 不是 arm64，产物会变成 x86_64，M1/M2 不适用"
+            exit 1
+          }
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cache sherpa-onnx native libs
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target/sherpa-onnx-prebuilt
+          key: sherpa-onnx-1.13.8-${{ runner.os }}-${{ runner.arch }}
+
+      # sherpa-onnx-sys 的 build.rs 只看 lib/ 目录是否存在；缓存恢复出空目录会让链接失败
+      - name: Verify sherpa-onnx native libs
+        shell: bash
+        run: |
+          found=$(find src-tauri/target/sherpa-onnx-prebuilt -type f \
+            -name 'libsherpa-onnx-c-api.a' -print -quit 2>/dev/null || true)
+          if [ -z "$found" ]; then
+            echo "::warning::sherpa-onnx 预编译库缺失，清空缓存后重新下载"
+            rm -rf src-tauri/target/sherpa-onnx-prebuilt
+          fi
+
+      - name: Cache ASR model
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/assets/models/sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16
+          key: asr-model-v1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Ensure typeshare 1.13.4
+        shell: bash
+        run: |
+          typeshare --version 2>/dev/null | grep -q 1.13.4 || \
+            cargo install typeshare-cli --version 1.13.4 --locked
+
+      - name: Show tool versions
+        shell: bash
+        run: |
+          uname -m
+          xcodebuild -version || true
+          xcrun --show-sdk-version || true
+          swift --version || true
+          node -v
+          pnpm -v
+          rustc -V
+          cargo -V
+          python -V
+
+      - name: Fetch ASR / VAD models
+        run: pnpm fetch:model
+
+      # 翻译模型只影响字幕翻译；失败不阻断 OBS 字幕构建
+      - name: Clean download caches
+        run: rm -rf .cache
+
+      - name: Build Tauri app (DMG)
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -o pipefail
+          pnpm tauri build --bundles app,dmg 2>&1 | tee build.log
+
+      - name: Show build log tail on failure
+        if: failure()
+        run: tail -n 80 build.log || true
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioScript-OBS-macOS-build-log
+          path: build.log
+          retention-days: 7
+
+      - name: Package .app for direct use
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find src-tauri/target -type d -name 'AudioScript.app' -maxdepth 6 | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "未找到 AudioScript.app，bundle 目录如下："
+            find src-tauri/target -maxdepth 6 \( -name '*.app' -o -name '*.dmg' \) -print || true
+            exit 1
+          fi
+          echo "找到 app：$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" AudioScript.app.zip
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioScript-OBS-macOS-ARM
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/**/bundle/dmg/*.dmg
+            AudioScript.app.zip
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+#（注：内容由AI生成）
